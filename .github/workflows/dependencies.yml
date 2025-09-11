@@ -1,0 +1,55 @@
+name: Update Dependencies
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  update:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-edit
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-edit
+
+    - name: Update dependencies
+      run: |
+        cargo upgrade
+        cargo update
+
+    - name: Run tests
+      run: cargo test
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update dependencies'
+        title: 'chore: update dependencies'
+        body: |
+          Automated dependency update.
+          
+          This PR updates all dependencies to their latest compatible versions.
+          
+          **Changes made:**
+          - Updated Cargo.toml dependencies
+          - Ran `cargo update` to update Cargo.lock
+          
+          **Testing:**
+          - All tests pass with updated dependencies
+          
+          Please review and merge if all checks pass.
+        branch: dependencies/auto-update
+        delete-branch: true

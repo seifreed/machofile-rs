@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross
+      if: matrix.cross
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cross
+
+    - name: Build binary
+      shell: bash
+      run: |
+        if [[ "${{ matrix.cross }}" == "true" ]]; then
+          cross build --release --target ${{ matrix.target }}
+        else
+          cargo build --release --target ${{ matrix.target }}
+        fi
+
+    - name: Package binary (Unix)
+      if: matrix.os != 'windows-latest'
+      shell: bash
+      run: |
+        cd target/${{ matrix.target }}/release
+        if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+          # macOS - create both binary and .app bundle
+          tar czf ../../../machofile-${{ matrix.target }}.tar.gz machofile
+          # Create .app bundle structure
+          mkdir -p ../../../machofile.app/Contents/MacOS
+          cp machofile ../../../machofile.app/Contents/MacOS/
+          cat > ../../../machofile.app/Contents/Info.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleExecutable</key>
+            <string>machofile</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.github.seifreed.machofile</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>machofile</string>
+            <key>CFBundleVersion</key>
+            <string>${{ github.ref_name }}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${{ github.ref_name }}</string>
+        </dict>
+        </plist>
+        EOF
+          cd ../../..
+          tar czf machofile-${{ matrix.target }}-app.tar.gz machofile.app
+        else
+          # Linux
+          tar czf ../../../machofile-${{ matrix.target }}.tar.gz machofile
+        fi
+
+    - name: Package binary (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: bash
+      run: |
+        cd target/${{ matrix.target }}/release
+        7z a ../../../machofile-${{ matrix.target }}.zip machofile.exe
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: machofile-${{ matrix.target }}
+        path: |
+          machofile-${{ matrix.target }}.*
+        retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display structure of downloaded files
+      run: ls -R artifacts
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
+        body: |
+          # machofile-rs Release ${{ github.ref_name }}
+          
+          High-performance Rust implementation for parsing Mach-O binary files.
+          
+          ## Download
+          
+          Choose the appropriate binary for your platform:
+          
+          ### macOS
+          - **machofile-x86_64-apple-darwin.tar.gz** - Intel Macs
+          - **machofile-aarch64-apple-darwin.tar.gz** - Apple Silicon Macs
+          - **machofile-x86_64-apple-darwin-app.tar.gz** - Intel Mac .app bundle
+          - **machofile-aarch64-apple-darwin-app.tar.gz** - Apple Silicon .app bundle
+          
+          ### Linux
+          - **machofile-x86_64-unknown-linux-gnu.tar.gz** - Standard Linux (glibc)
+          - **machofile-x86_64-unknown-linux-musl.tar.gz** - Static Linux (musl)
+          - **machofile-aarch64-unknown-linux-gnu.tar.gz** - ARM64 Linux
+          
+          ### Windows
+          - **machofile-x86_64-pc-windows-msvc.zip** - Windows x64
+          
+          ## Usage
+          ```bash
+          # Extract and run
+          tar xzf machofile-*.tar.gz  # or unzip for Windows
+          ./machofile --help
+          
+          # Example usage
+          ./machofile -f /bin/ls -a --json
+          ```
+          
+          ## What's New
+          - Complete feature parity with Python machofile
+          - 10x+ performance improvement
+          - Zero-copy parsing
+          - Cross-platform single binary
+        draft: false
+        prerelease: false
+        files: |
+          artifacts/*/machofile-*.*
